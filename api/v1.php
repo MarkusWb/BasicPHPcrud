@@ -7,10 +7,13 @@ use Firebase\JWT\Key;
 
 header('Content-Type: application/json');
 
-if ($_SERVER['ORIG_PATH_INFO'] === '/' || $_SERVER['ORIG_PATH_INFO'] === $_SERVER['PHP_SELF']) {
+if (!isset($_SERVER[$path_info]) || $_SERVER[$path_info] === '/' || $_SERVER[$path_info] === $_SERVER['PHP_SELF']) {
   exit_msg_code('Path undefined', 400);
 }
 
+if (!isset($_SERVER[$auth_header_field])) {
+  exit_msg_code('Missing authorization', 401);
+}
 
 if (! preg_match('/Bearer\s(\S+)/', $_SERVER[$auth_header_field], $matches)) {
   exit_msg_code('Token not found in request', 401);
@@ -37,7 +40,7 @@ if ($token['iss'] !== $_SERVER['HTTP_HOST'] ||
 /*
 // Code for Basic Auth
 if (isset($_SERVER[$auth_header_field]) && 0 === stripos($_SERVER[$auth_header_field], 'basic ')) {
-  $exploded = explode(':', base64_decode(substr($_SERVER['REDIRECT_HTTP_AUTHORIZATION'], 6)), 2);
+  $exploded = explode(':', base64_decode(substr($_SERVER[$auth_header_field], 6)), 2);
   if (2 == \count($exploded)) {
     list($req_user, $req_pw) = $exploded;
   }
@@ -53,19 +56,12 @@ if (isset($_SERVER[$auth_header_field]) && 0 === stripos($_SERVER[$auth_header_f
 */ 
 
 $method = $_SERVER['REQUEST_METHOD'];
-$path = explode("/", substr(@$_SERVER['ORIG_PATH_INFO'], 1));
-$param_strings = explode("&", $_SERVER['argv'][0]);
-$parameters = array();
-foreach ($param_strings as $param_string) {
-  $part = explode('=', $param_string);
-  $parameters[$part[0]] = sizeof($part) > 1 ? urldecode($part[1]) : "";
-}
+$path = explode("/", substr(@$_SERVER[$path_info], 1));
+$query_parameters = get_query_parameters(explode("&", $_SERVER['QUERY_STRING']));
 
 
-$user_roles = explode(",", $token['roles']); // for Basic auth use $user[0]['roles'] instead of $token['roles']
-if (isset($auth_filter[$path[0]]) && empty(array_intersect($auth_filter[$path[0]], $user_roles))) {
-  exit_msg_code('Forbidden', 403);
-}
+filter_by_role($token, /*$user,*/ $path, $auth_filter);
+
 
 // basic sanitation of table name
 if (str_contains($path[0], ';') || str_contains($path[0], ' ')) {
@@ -75,13 +71,7 @@ if (str_contains($path[0], ';') || str_contains($path[0], ' ')) {
 try {
   switch ($method) {
     case 'GET':
-      $single = isset($path[1]) && $path[1] !== '';
-      $query = 'SELECT '
-            . ($path[0] === $user_meta['t_users'] ? $user_meta['allowed_fields'] : '*')
-            . ' FROM ' . $path[0] . ($single ? ' WHERE id=?' : '');
-      $parameters = $single ? [ $path[1] ] : [];
-      $data = run_sql_statement('GET' . ($single ? '' : '+'), $host_name, $user_name, $password, $database, $query, $parameters);
-      echo json_encode($data);
+      get($path, $query_parameters, $host_name, $user_name, $password, $database, $user_meta);
       break;
     case 'POST':
       post_put($method, $path, file_get_contents('php://input'), $host_name, $user_name, $password, $database);
@@ -110,6 +100,124 @@ try {
   }
 } catch (Exception $ex) {
   exit_msg_code($ex->getMessage(), 500);
+}
+
+
+function get_query_parameters($param_strings) {
+  $parameters = array();
+  foreach ($param_strings as $param_string) {
+    $part = explode('=', $param_string);
+    $parameters[$part[0]] = sizeof($part) > 1 ? urldecode($part[1]) : "";
+  }
+  return $parameters;
+}
+
+function filter_by_role($token, /*$user,*/ $path, $auth_filter) {
+  $user_roles = explode(",", $token['roles']); // for Basic auth use $user[0]['roles'] instead of $token['roles']
+  if (isset($auth_filter[$path[0]]) && empty(array_intersect($auth_filter[$path[0]], $user_roles))) {
+    exit_msg_code('Forbidden', 403);
+  }
+}
+
+function get($path, $query_params, $host_name, $user_name, $password, $database, $u) {
+  $single = isset($path[1]) && $path[1] !== '';
+  
+  $expands = join_info($path, $query_params, $host_name, $user_name, $password, $database);
+  
+  $query = 'SELECT '
+        . main_table_fields($path, $u, $expands)   // restrict user table
+        . $expands['selects']
+        . ' FROM ' . $path[0] . ' e'
+        . $expands['joins']
+        . ($single ? ' WHERE e.id=?' : '');
+  $parameters = $single ? [ $path[1] ] : [];
+  
+  $data = run_sql_statement('GET', $host_name, $user_name, $password, $database, $query, $parameters);
+  if (!empty($expands['expands'])) {
+    $data = expands_to_field($data, $expands);
+  }
+  if ($single) {
+    $data = $data[0];
+  }
+  echo json_encode($data);
+}
+
+function main_table_fields($path, $u, $expands) {
+  return $path[0] === $u['t_users']
+      ? implode(', ', array_map(function($f) {return 'e.'.$f;}, explode(',', $u['allowed_fields'])))
+      : 'e.*';
+}
+
+function join_info($path, $query_params, $host_name, $user_name, $password, $database) {
+  $join = '';
+  $selects = '';
+  $expands = [];
+  $cols = [];
+  if (isset($query_params['$expand'])) {
+    $sql_tables = 'SELECT TABLE_NAME FROM information_schema.tables WHERE table_type = "BASE TABLE"';
+    $tables = array_map(function($t) {return $t['TABLE_NAME'];}, 
+              run_sql_statement('GET', $host_name, $user_name, $password, $database, $sql_tables, [])
+    );
+    $tables_to_expand = explode(',', $query_params['$expand']);
+    $c = 0;
+    foreach ($tables_to_expand as $t_expand) {
+      $t_manytomany = $path[0] . '_' . $t_expand;
+      $join_available = FALSE;
+      if (in_array($t_manytomany, $tables)) {
+        $join .= ' INNER JOIN ' . $t_manytomany . ' mtm' . $c . 'ON e.id = mtm' . $c . '.' . $path[0] . '_id' .
+                ' INNER JOIN ' . $t_expand . ' e' . $c . 'ON mtm.' . $t_expand . '_id = e' . $c . '.id';
+        $join_available = TRUE;
+      } elseif (in_array($t_expand, $tables)) {
+        $join .= ' INNER JOIN ' . $t_expand . ' e' . $c . ' ON e.id = e' . $c . '.' . $path[0] . '_id';
+        $join_available = TRUE;
+      }
+      if ($join_available) {
+        $expands[] = $t_expand;
+        $sql_columns = 'SHOW COLUMNS FROM ' . $t_expand;
+        $cols = array_map(function($tc) {return $tc['Field'];}, 
+                run_sql_statement('GET', $host_name, $user_name, $password, $database, $sql_columns, [])
+        );
+        $t_expand_fields = [];
+        foreach ($cols as $col) {
+          $new_colname = $t_expand . '_' . $col;
+          $cols[$new_colname] = [ 'table' => $t_expand, 'col' => $col];
+          $t_expand_fields[] = 'e' . $c . '.' . $col . ' AS ' . $new_colname;
+        }
+        $selects .= ', ' . implode(', ', $t_expand_fields);
+      }
+      $c++;
+    }
+  }
+  return array( 'joins' => $join, 'selects' => $selects, 'expands' => $expands, 'cols' => $cols);
+}
+
+function expands_to_field($data, $expands) {
+  $new_data = [];
+  $sub_fields = [];
+  foreach ($expands['expands'] as $table) {
+    $sub_fields[$table] = [];
+  }
+  foreach ($data as $row) {
+    $id = $row['id'];
+    $main = [];
+    foreach ($row as $col=>$val) {
+      if (isset($expands['cols'][$col])) {
+        $sub_fields[$expands['cols'][$col]['table']][$expands['cols'][$col]['col']] = $val;
+      } else {
+        $main[$col] = $val;
+      }
+    }
+    if (!isset($new_data[$id])) {
+      foreach ($expands['expands'] as $table) {
+        $main[$table] = [];
+      }
+      $new_data[$id] = $main;
+    }
+    foreach ($sub_fields as $key=>$val) {
+      $new_data[$id][$key][] = $val;
+    }
+  }
+  return array_values($new_data);
 }
 
 function post_put($method, $path, $content, $host_name, $user_name, $password, $database) {

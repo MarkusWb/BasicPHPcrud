@@ -1,5 +1,7 @@
 <?php
-$jwt_key  = 'someloooooooongencryptionkey';
+error_reporting(0);
+
+$jwt_key  = 'someatleast256bitlongencryptionkey------------------------------';
 
 // db infos
 $host_name = 'dbhost.com';
@@ -8,6 +10,7 @@ $user_name = 'user12345';
 $password = '12345';
 
 $auth_header_field = 'REDIRECT_HTTP_AUTHORIZATION'; // could also be 'HTTP_AUTHORIZATION' depending on Apache settings
+$path_info = 'ORIG_PATH_INFO';                      // could also be 'PATH_INFO' depending on Apache settings
 
 $user_meta = [
     't_users' => 'users',
@@ -105,9 +108,6 @@ function run_sql_statement($method, $host_name, $user_name, $password, $database
     $value = $statement->insert_id;
   }
   if ($method === 'GET') {
-    $value = $result->fetch_object();
-  }
-  if ($method === 'GET+') {
     $value = $result->fetch_all(MYSQLI_ASSOC);
   }
   if ($method === 'DELETE') {

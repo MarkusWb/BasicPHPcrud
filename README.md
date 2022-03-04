@@ -17,7 +17,7 @@ With the config variable `$user_meta['allowed_fields']` can the request to the u
 A path filter can be defined with the config variable `$auth_filter`. An array of user roles with the path name as key will restrict the access to users with at least one listed role.
 
 ## Login
-For login a JSON body with the fields `user` and `password` must be POSTed to `/api/login`. The JSON response will contain the `token` in the field `jwt`, which has to be passed as Bearer token in the Auth Header of all requests to `/api/v1/*`, expiration date in `expires`, and the roles of the user. The validity period of the token can be set in the variable `$validity` in `login.php`.
+For login a JSON object with the fields `user` and `password` must be POSTed to `/api/login`. The JSON response object will contain the `token` in the field `jwt`, which has to be passed as Bearer token in the Auth Header of all requests to `/api/v1/*`, expiration date in `expires`, and the roles of the user. The validity period of the token can be set in the variable `$validity` in `login.php`.
 
 ## Dependencies
-The authorization with JWT depends on Firebase/JWT. You have to install it by Composer or manually.
+The authorization with JWT depends on [firebase/PHP-JWT](https://github.com/firebase/php-jwt). You can install it with composer.
