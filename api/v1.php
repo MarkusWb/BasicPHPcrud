@@ -164,8 +164,8 @@ function join_info($path, $query_params, $host_name, $user_name, $password, $dat
       $t_manytomany = $path[0] . '_' . $t_expand;
       $join_available = FALSE;
       if (in_array($t_manytomany, $tables)) {
-        $join .= ' INNER JOIN ' . $t_manytomany . ' mtm' . $c . 'ON e.id = mtm' . $c . '.' . $path[0] . '_id' .
-                ' INNER JOIN ' . $t_expand . ' e' . $c . 'ON mtm.' . $t_expand . '_id = e' . $c . '.id';
+        $join .= ' INNER JOIN ' . $t_manytomany . ' mtm' . $c . ' ON e.id = mtm' . $c . '.' . $path[0] . '_id' .
+                ' INNER JOIN ' . $t_expand . ' e' . $c . ' ON mtm' . $c . '.' . $t_expand . '_id = e' . $c . '.id';
         $join_available = TRUE;
       } elseif (in_array($t_expand, $tables)) {
         $join .= ' INNER JOIN ' . $t_expand . ' e' . $c . ' ON e.id = e' . $c . '.' . $path[0] . '_id';
